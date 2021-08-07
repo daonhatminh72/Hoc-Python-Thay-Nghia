@@ -1,1 +1,518 @@
 
+#======================== MÔ TẢ CHỨC NĂNG ========================#
+#Tìm tất cả token trên CG rồi tìm những token nào thỏa mãn các điều kiện về volume , giá , categories , market cap 
+#Hiện tại đang check đc các coin nền tàng ethereum và binance smart chain
+#Từ mục tiêu để tìm ra token đang đc accumulation mạnh = > check fundamental Analysis
+
+
+#========================Update V1.0========================#
+
+from urllib.request import urlopen
+import json
+import xlsxwriter
+from time import sleep
+import threading
+import requests
+from fake_useragent import UserAgent
+import random
+import subprocess
+
+#*********************Khu Vực Điền Điều Kiện Chạy**************************#
+
+#những tag ngành đang đc bay ( lấy ở tool 9 ) NÊU KHÔNG MUỐN PHẢI CHECK TAG THÌ ĐỂ LIST RỖNG
+whiteTagList = []
+
+#Điều Kiện Tuổi Thọ Của Token
+minimum_longivity = 20 #Ít Thay Đổi
+
+#Trong 16 tuần phải có ít nhất 4 tuần thỏa mãn điều kiện
+#có volume cao top 6 trong 24 tuần vả có giá thấp trong top 6 trong 24 tuần
+#Với điều kiện volume lớn nhất gấp min_multiplication lần volume nhỏ nhất trong allTime tuần
+in_x_week = 16 #Ít Thay Đổi
+have_y_weeks = 4 #Ít Thay Đổi
+top_z = have_y_weeks * 2 #điều kiện top 7 tuần lowest price và hightest vol (LƯU Ý luôn phải lớn hơn have_y_weeks)
+allTime = have_y_weeks * 6 #tức là dù token có lịch sử dài như nào thì chỉ lấy ra khung thời gian là allTime tuần để tìm Max vol và Min price
+min_multiplication = 8
+
+#Điều Kiện Volume lớn đột biến gấp x lần
+volume_tang_dot_bien = 5 #Ít Thay Đổi
+
+#Điều Kiện MCC Tối Đa
+maximum_mcc = 20000000 #Ít Thay Đổi
+
+#Điều Kiện trung bình volume 1 tuần phải đạt ít nhất (để tránh coin rác)
+minimum_weekly_volume = 100000 #Ít Thay Đổi
+
+#Điều kiện giá hiện tại chỉ cao hơn ATL tối đa bao nhiêu %
+percentage_higher_than_ATL = 300 # 200% tương đương x3(check kèo pump rồi điều chỉnh để tầm 400 còn chưa pump là 200) (BEST CHOICE)
+
+#Điều kiện check giá hiện tại chỉ đc cao hơn bao nhiêu lần so với trung bình giá (THƯỜNG SẼ CHECK THEO ATL, KO CHECK THEO CÁI NÀY)
+times_higher_than_averPrice = 3
+
+#*********************Khu Vực Điền Điều Kiện Chạy**************************#
+
+
+#tạo chỗ chứa ID Coingecko
+#storeMCCRank = []
+storeTokenAddress = []
+storeTokenSymbol = []
+storeTokenID = []
+storeAtlPerChange = []
+storePlatform = []
+storeCategories = []
+
+storeTokenAddress_bsc = []
+storeTokenSymbol_bsc = []
+storeTokenID_bsc = []
+storeAtlPerChange_bsc = []
+storePlatform_bsc = []
+storeCategories_bsc = []
+
+#Lấy ID Coingecko từ API
+ua = UserAgent()
+url = 'https://api.coingecko.com/api/v3/coins/list'
+headers = {
+  'User-Agent':ua.random
+}
+getID = requests.get(url,headers=headers).json()
+
+#tạo chỗ chứa kết quả lấy ra
+storeExcelContent = []
+storeExcelTkAddress = []
+storeExcelTkId = []
+storeExcelTkPlatform = []
+storeExcelCategories = []
+
+#Ném ID vào trong storeID
+storeID = [i['id'] for i in getID]
+
+#lấy ra danh sách các sàn mà ở trong từ khóa blacklist
+callExList = json.loads(urlopen('https://api.coingecko.com/api/v3/exchanges/list').read()) 
+exFilter = ['swap','futures','bilaxy','bitrue','bithumb','upbit','coinone']
+exAfterFilter = [kk['id'] for kk in callExList if any ([xx in kk['id'] for xx in exFilter])]
+
+# chia luồng ném MCC Rank và Contract Address vào array
+count = 0
+thread_number = 50
+
+def change_ip():
+    print('đổi ip')
+    try:
+      subprocess.call('wmic path win32_networkadapter where index=1 call disable')
+      subprocess.call('rasdial Viettel')
+    except:
+      subprocess.call('wmic path win32_networkadapter where index=1 call disable')
+      subprocess.call('rasdial Viettel') 
+    try:
+      url = 'https://api.myip.com/'
+      myip = requests.get(url).json()
+      print(myip['ip'])
+    except:
+      print('Không xem đc IP hiện tại')
+
+def tat_dcom():
+    try:
+      subprocess.call('rasdial /disconnect')
+      print('Đã tắt Dcom')
+    except:
+      subprocess.call('rasdial /disconnect')
+      print('Đã tắt Dcom')
+
+def tao_thread(jj):
+  global thread_number
+  for create_thread in range(thread_number):
+      new_thread = threading.Thread(target=chia_storeID,args=(jj,create_thread))
+      new_thread.start()
+  while threading.active_count() >1:
+    pass
+  print('done')
+
+def tao_thread_tinh_bsc(jj):
+  global thread_number
+  for create_thread in range(thread_number):
+      new_thread = threading.Thread(target=get_bscToken_historical_price,args=(jj,create_thread))
+      new_thread.start()
+  while threading.active_count() >1:
+    pass
+  print('done')
+
+
+def tao_thread_tinh_eth(jj):
+  global thread_number
+  for create_thread in range(thread_number):
+      new_thread = threading.Thread(target=get_ethToken_historical_price,args=(jj,create_thread))
+      new_thread.start()
+  while threading.active_count() >1:
+    pass
+  print('done')    
+  
+
+def chia_storeID(jj,create_thread):
+  global count
+  global thread_number
+  global whiteTagList
+  global exAfterFilter
+  for j in range(create_thread+jj,len(storeID)):
+    print(storeID[jj])
+    print(f'{count}/{len(storeID)}')
+    count +=1
+    try:
+      url = f'https://api.coingecko.com/api/v3/coins/{storeID[j]}'
+      headers = {
+        'User-Agent':ua.random
+      }
+      getContractAddress = requests.get(url,headers=headers).json()
+      
+    except Exception as e:
+      print(e)
+      try: # thử lại phát nữa
+        url = f'https://api.coingecko.com/api/v3/coins/{storeID[j]}'
+        headers = {
+        'User-Agent':ua.random
+        }
+        getContractAddress = requests.get(url,headers=headers).json()
+        
+      except Exception as e:
+        print(e)
+        break
+
+    #Nếu token ID này mà có danh sách sàn đc trade trong black list thì skip luôn khởi check gì hết
+    try:
+      listedTokenExchange = [hh['market']['identifier'] for hh in getContractAddress['tickers']]
+
+      if all(check in exAfterFilter for check in listedTokenExchange):
+        break
+    except:
+      break    
+
+    #Nếu whiteTagList mà rỗng thì ko cần check điều kiện checkTag , còn ko rỗng thì check
+    if len(whiteTagList) > 0:
+      # Nếu token ID này mà có danh sách tag ngành không nằm trong whitelist thì skip luôn khỏi check gì hết 
+      # (những ID ko có tag thì cũng bỏ qua, khá nhiều ID ko có tag)
+      tagCoin = [cc for cc in getContractAddress['categories']]
+      if all(checkTag not in whiteTagList for checkTag in tagCoin):
+        break  
+
+    if getContractAddress['asset_platform_id'] == 'ethereum':
+      try:
+        print('platform ethereum')       
+        storeTokenAddress.append(getContractAddress['platforms']['ethereum'])
+        #storeMCCRank.append(getContractAddress['market_cap_rank'])
+        storeTokenSymbol.append(getContractAddress['symbol'])
+        storeTokenID.append(getContractAddress['id'])
+        storeAtlPerChange.append(getContractAddress['market_data']['atl_change_percentage']['usd'])
+        storePlatform.append('Ethereum')
+        storeCategories.append(str([k for k in getContractAddress['categories']]))
+      except:
+        break
+    elif getContractAddress['asset_platform_id'] == 'binance-smart-chain':
+      try:
+        print('platform binance')    
+        storeTokenAddress_bsc.append(getContractAddress['platforms']['binance-smart-chain'])
+        #storeMCCRank.append(getContractAddress['market_cap_rank'])
+        storeTokenSymbol_bsc.append(getContractAddress['symbol'])
+        storeTokenID_bsc.append(getContractAddress['id'])
+        storeAtlPerChange_bsc.append(getContractAddress['market_data']['atl_change_percentage']['usd'])
+        storePlatform_bsc.append('Binance Smart Chain')
+        storeCategories_bsc.append(str([k_bsc for k_bsc in getContractAddress['categories']]))
+      except:
+        break
+    break    
+
+#Gọi ra các hàm cần thiết để thực hiện việc lấy ra thông tin các Token
+for jj in range (0,len(storeID),thread_number):
+  change_ip()
+  tao_thread(jj)
+  tat_dcom()
+      
+# nén 2 cái storeTokenAddress và StoreTokensymbol vào 
+storeTokenInfo = zip(storeTokenAddress,storeTokenSymbol,storeAtlPerChange,storeTokenID,storePlatform,storeCategories)
+storeTokenInfo_bsc = zip(storeTokenAddress_bsc,storeTokenSymbol_bsc,storeAtlPerChange_bsc,storeTokenID_bsc,storePlatform_bsc,storeCategories_bsc)       
+
+
+#Dùng address các token lấy ra history price API
+def get_bscToken_historical_price (jj,create_thread): 
+  global storeTokenAddress_bsc
+  global storeTokenSymbol_bsc
+  global storeAtlPerChange_bsc
+  global storeTokenID_bsc
+  global storePlatform_bsc
+  global thread_number
+  global whiteTagList
+  global minimum_longivity 
+  global in_x_week 
+  global have_y_weeks
+  global volume_tang_dot_bien 
+  global maximum_mcc 
+  global minimum_weekly_volume
+  global percentage_higher_than_ATL
+  global times_higher_than_averPrice
+  global storeCategories_bsc
+  global top_z
+  global allTime
+  global min_multiplication
+  for bsc in range(create_thread+jj,len(storeTokenID_bsc)):
+    print(storeTokenSymbol_bsc[bsc])
+    storeAverVolume_bsc =[]
+    storeAverPrice_bsc = []
+    storeVolume_gtavrvl_bsc= []
+    storeGroupAverVol_bsc = []
+    storeGroupAverPrice_bsc = []
+    storeGroupPriceNotOk_bsc = []
+
+    linkHistPriAPI_bsc = f'https://api.coingecko.com/api/v3/coins/{storeTokenID_bsc[bsc]}/market_chart?vs_currency=usd&days=max&interval=daily'
+    try:
+      callHistPriAPI_bsc = urlopen(linkHistPriAPI_bsc).read() #nếu read bị timeout thì bỏ qua mẹ luôn
+    except:
+      try:
+        callHistPriAPI_bsc = urlopen(linkHistPriAPI_bsc).read()
+      except Exception as e:
+        print(e)
+        break    
+    loadsHistPriAPI_bsc = json.loads(callHistPriAPI_bsc)
+    try:
+      print(len(loadsHistPriAPI_bsc['prices'])) # nếu token nào ko có price thì skip luôn
+      print(len(loadsHistPriAPI_bsc['total_volumes']))
+    except:
+      try:
+        print(len(loadsHistPriAPI_bsc['prices'])) # thử lại phát nữa cho chắc
+        print(len(loadsHistPriAPI_bsc['total_volumes']))
+      except Exception as e:
+        print(e)
+        break  
+    #ném volume và Price từ đầu đến t-7 vào array   
+    for f_bsc in range(len(loadsHistPriAPI_bsc['prices'])):
+      try:
+        storeAverVolume_bsc.append(loadsHistPriAPI_bsc['total_volumes'][f_bsc][1]) 
+        storeAverPrice_bsc.append(loadsHistPriAPI_bsc['prices'][f_bsc][1])
+      except:
+        try:
+          storeAverVolume_bsc.append(loadsHistPriAPI_bsc['total_volumes'][f_bsc][1]) 
+          storeAverPrice_bsc.append(loadsHistPriAPI_bsc['prices'][f_bsc][1])
+        except:
+          break
+    for o_bsc in range (0,len(storeAverVolume_bsc),7):
+      storeGroupAverVol_bsc.append(sum(storeAverVolume_bsc[::-1][o_bsc:o_bsc+7]))
+      storeGroupAverPrice_bsc.append(sum(storeAverPrice_bsc[::-1][o_bsc:o_bsc+7])) 
+
+    if (len(storeGroupAverVol_bsc) < minimum_longivity):
+      break
+
+    #tính toàn các thứ sau khi đã lấy đc dữ liệu
+    try: 
+      averVolume_bsc = sum(storeGroupAverVol_bsc[0:56])/56 # lấy trung bình volume trong 1 năm
+      averPrice_bsc = sum(storeGroupAverPrice_bsc[0:56])/56 # lấy trung bình giá trong 1 năm    
+      todayPrice_bsc = loadsHistPriAPI_bsc['prices'][len(loadsHistPriAPI_bsc['prices'])-1][1]
+      marketCap_bsc = round(loadsHistPriAPI_bsc['market_caps'][len(loadsHistPriAPI_bsc['market_caps'])-1][1])
+    except:
+      try:
+        averVolume_bsc = sum(storeGroupAverVol_bsc[0:56])/56 # lấy trung bình volume trong 1 năm
+        averPrice_bsc = sum(storeGroupAverPrice_bsc[0:56])/56   # lấy trung bình giá trong 1 năm    
+        todayPrice_bsc = loadsHistPriAPI_bsc['prices'][len(loadsHistPriAPI_bsc['prices'])-1][1]
+        marketCap_bsc = round(loadsHistPriAPI_bsc['market_caps'][len(loadsHistPriAPI_bsc['market_caps'])-1][1])
+      except:
+        break   
+    #=============================Khu vực Chọn Điều Kiện Lọc=============================#    
+
+    conditionAtlPerChange_bsc = storeAtlPerChange_bsc[bsc] < percentage_higher_than_ATL # 200% tương đương x3(check kèo pump rồi điều chỉnh để tầm 400 còn chưa pump là 200)
+    conditionAverPrice_bsc = averPrice_bsc*times_higher_than_averPrice 
+    conditionCheck_bsc = conditionAtlPerChange_bsc # đây là chỗ chọn điều kiện lọc xem thích lọc theo ATL percentage change hay theo giá
+
+    #=============================Khu vực Chọn Điều Kiện Lọc=============================#     
+    if (conditionCheck_bsc==conditionAverPrice_bsc):    
+      for b_bsc in storeGroupAverPrice_bsc[0:12]:
+        if b_bsc >= conditionAverPrice:
+          storeGroupPriceNotOk_bsc.append(b_bsc)
+          break
+    else:
+      if (conditionAtlPerChange_bsc == False):
+        storeGroupPriceNotOk_bsc.append('Điều kiện không thỏa mãn')  
+    #================CHỌN 1 TRONG 2 ĐIỀU KIỆN=======================#
+    #ĐK 1: lấy từng giá trị trong volume nhóm 7 ngày so sánh average vol nếu nhiều hơn gâp n lần bỏ vào 1 array khác
+    if len(storeGroupPriceNotOk_bsc) == 0:
+      for s_bsc in storeGroupAverVol_bsc[0:in_x_week]:
+        if s_bsc >= averVolume_bsc*volume_tang_dot_bien:
+          storeVolume_gtavrvl_bsc.append(s_bsc)
+    else:
+      break       
+
+    #ĐK 2: lấy ra x tuần gần nhất nếu có x tuần thỏa mãn điều kiện Max Vol Min Price thì bỏ vào 1 array khác
+    storeMaxVolMinPrice_bsc = []
+    tophigh_storeGroupAverVol_bsc = sorted(storeGroupAverVol_bsc[:allTime])[-top_z:] #Lấy ra top z tuần có vol cao nhất trong allTime tuần
+    toplow_storeGroupAverPrice_bsc = sorted(storeGroupAverPrice_bsc[:allTime])[:top_z] #Lấy ra top z tuần có price thấp nhấttrong allTime tuần
+    for i in range(in_x_week): # trong x tuần gần nhất có bao nhiêu tuần thỏa mãn đk Max vol Min price
+    	if ((storeGroupAverVol_bsc[i] in tophigh_storeGroupAverVol_bsc) and (storeGroupAverPrice_bsc[i]/7 < percentage_higher_than_ATL) and (max(storeGroupAverVol_bsc) >= min(storeGroupAverVol_bsc)*min_multiplication )): 
+    		storeMaxVolMinPrice_bsc.append(i)
+    	elif len(storeMaxVolMinPrice_bsc) >= have_y_weeks:
+    		break
+
+    #================CHỌN 1 TRONG 2 ĐIỀU KIỆN=======================#	
+
+    #nếu có ít nhất 1 volume gấp 10 lần volume trung bình VÀ ĐIỀU KIỆN MARKETCAP THỎA MÃN thì cho vào array để sau viết ra bảng
+    if ((len(storeMaxVolMinPrice_bsc) >= have_y_weeks) and (marketCap_bsc < maximum_mcc) and (sum(storeGroupAverVol_bsc[0:4])/4 >= minimum_weekly_volume)): #Volume trung bình 1 tuần gần nhất phải trên 100k
+      storeExcelTkAddress.append(storeTokenAddress_bsc[bsc])
+      storeExcelContent.append(storeTokenSymbol_bsc[bsc].upper())
+      storeExcelTkId.append(storeTokenID_bsc[bsc])
+      storeExcelTkPlatform.append(storePlatform_bsc[bsc])
+      storeExcelCategories.append(storeCategories_bsc[bsc])
+    break      
+
+#Gọi ra các hàm cần thiết để thực hiện việc lấy ra thông tin hisrorical price trên BINANCE SMART CHAIN
+for jj in range (0,len(storeTokenID_bsc),thread_number):
+  change_ip()
+  tao_thread_tinh_bsc(jj)
+  tat_dcom()
+
+def get_ethToken_historical_price (jj,create_thread): 
+  global storeTokenAddress
+  global storeTokenSymbol
+  global storeAtlPerChange
+  global storeTokenID
+  global storePlatform
+  global thread_number
+  global whiteTagList
+  global minimum_longivity 
+  global in_x_week 
+  global have_y_weeks
+  global volume_tang_dot_bien 
+  global maximum
+  global minimum_weekly_volume
+  global percentage_higher_than_ATL
+  global times_higher_than_averPrice
+  global storeCategories
+  global top_z
+  global allTime
+  global min_multiplication
+  for eth in range(create_thread+jj,len(storeTokenID)):
+    print(storeTokenSymbol[eth])
+    storeAverVolume =[]
+    storeAverPrice = []
+    storeVolume_gtavrvl= []
+    storeGroupAverVol = []
+    storeGroupAverPrice = []
+    storeGroupPriceNotOk = []
+
+    linkHistPriAPI = f'https://api.coingecko.com/api/v3/coins/{storeTokenID[eth]}/market_chart?vs_currency=usd&days=max&interval=daily'
+    try:
+      callHistPriAPI = urlopen(linkHistPriAPI).read() #nếu read bị timeout thì bỏ qua mẹ luôn
+    except:
+      try:
+        callHistPriAPI = urlopen(linkHistPriAPI).read()
+      except Exception as e:
+        print(e)
+        break    
+    loadsHistPriAPI = json.loads(callHistPriAPI)
+    try:
+      print(len(loadsHistPriAPI['prices'])) # nếu token nào ko có price thì skip luôn
+      print(len(loadsHistPriAPI['total_volumes']))
+    except:
+      try:
+        print(len(loadsHistPriAPI['prices'])) # thử lại phát nữa cho chắc
+        print(len(loadsHistPriAPI['total_volumes']))
+      except Exception as e:
+        print(e)
+        break  
+    #ném volume và Price từ đầu đến t-7 vào array   
+    for f in range(len(loadsHistPriAPI['prices'])):
+      try:
+        storeAverVolume.append(loadsHistPriAPI['total_volumes'][f][1]) 
+        storeAverPrice.append(loadsHistPriAPI['prices'][f][1])
+      except:
+        try:
+          storeAverVolume.append(loadsHistPriAPI['total_volumes'][f][1]) 
+          storeAverPrice.append(loadsHistPriAPI['prices'][f][1])
+        except:
+          break
+    for o in range (0,len(storeAverVolume),7):
+      storeGroupAverVol.append(sum(storeAverVolume[::-1][o:o+7]))
+      storeGroupAverPrice.append(sum(storeAverPrice[::-1][o:o+7])) 
+
+    if (len(storeGroupAverVol) < minimum_longivity):
+      break
+
+    #tính toàn các thứ sau khi đã lấy đc dữ liệu
+    try: 
+      averVolume = sum(storeGroupAverVol[0:56])/56 # lấy trung bình volume trong 1 năm
+      averPrice = sum(storeGroupAverPrice[0:56])/56 # lấy trung bình giá trong 1 năm    
+      todayPrice = loadsHistPriAPI['prices'][len(loadsHistPriAPI['prices'])-1][1]
+      marketCap = round(loadsHistPriAPI['market_caps'][len(loadsHistPriAPI['market_caps'])-1][1])
+    except:
+      try:
+        averVolume = sum(storeGroupAverVol[0:56])/56 # lấy trung bình volume trong 1 năm
+        averPrice = sum(storeGroupAverPrice[0:56])/56   # lấy trung bình giá trong 1 năm    
+        todayPrice = loadsHistPriAPI['prices'][len(loadsHistPriAPI['prices'])-1][1]
+        marketCap = round(loadsHistPriAPI['market_caps'][len(loadsHistPriAPI['market_caps'])-1][1])
+      except:
+        break   
+    #=============================Khu vực Chọn Điều Kiện Lọc=============================#    
+
+    conditionAtlPerChange = storeAtlPerChange[eth] < percentage_higher_than_ATL # 200% tương đương x3(check kèo pump rồi điều chỉnh để tầm 400 còn chưa pump là 200)
+    conditionAverPrice = averPrice*times_higher_than_averPrice 
+    conditionCheck = conditionAtlPerChange # đây là chỗ chọn điều kiện lọc xem thích lọc theo ATL percentage change hay theo giá
+
+    #=============================Khu vực Chọn Điều Kiện Lọc=============================#     
+    if (conditionCheck==conditionAverPrice):    
+      for b in storeGroupAverPrice[0:12]:
+        if b >= conditionAverPrice:
+          storeGroupPriceNotOk.append(b)
+          break
+    else:
+      if (conditionAtlPerChange == False):
+        storeGroupPriceNotOk.append('Điều kiện không thỏa mãn')  
+    #================CHỌN 1 TRONG 2 ĐIỀU KIỆN=======================#
+    #ĐK 1: lấy từng giá trị trong volume nhóm 7 ngày so sánh average vol nếu nhiều hơn gâp n lần bỏ vào 1 array khác
+    if len(storeGroupPriceNotOk) == 0:
+      for s in storeGroupAverVol[0:in_x_week]:
+        if s >= averVolume*volume_tang_dot_bien:
+          storeVolume_gtavrvl.append(s)
+    else:
+      break       
+
+    #ĐK 2: lấy ra x tuần gần nhất nếu có x tuần thỏa mãn điều kiện Max Vol Min Price thì bỏ vào 1 array khác
+    storeMaxVolMinPrice = []
+    tophigh_storeGroupAverVol = sorted(storeGroupAverVol[:allTime])[-top_z:] #Lấy ra top 7 tuần có vol cao nhất
+    toplow_storeGroupAverPrice = sorted(storeGroupAverPrice[:allTime])[:top_z] #Lấy ra top 7 tuần có price thấp nhất
+    for i in range(in_x_week): # trong x tuần gần nhất có bao nhiêu tuần thỏa mãn đk Max vol Min price
+    	if ((storeGroupAverVol[i] in tophigh_storeGroupAverVol) and (storeGroupAverPrice[i]/7 < percentage_higher_than_ATL) and (max(storeGroupAverVol) >=min(storeGroupAverVol)*min_multiplication )): # 
+    		storeMaxVolMinPrice.append(i)
+    	elif len(storeMaxVolMinPrice) >= have_y_weeks:
+    		break	
+    #================CHỌN 1 TRONG 2 ĐIỀU KIỆN=======================#	
+
+    #nếu có ít nhất 1 volume gấp 10 lần volume trung bình VÀ ĐIỀU KIỆN MARKETCAP THỎA MÃN thì cho vào array để sau viết ra bảng
+    if ((len(storeMaxVolMinPrice) >= have_y_weeks) and (marketCap < maximum_mcc) and (sum(storeGroupAverVol[0:4])/4 >= minimum_weekly_volume)): #Volume trung bình 1 tuần gần nhất phải trên 100k
+      storeExcelTkAddress.append(storeTokenAddress[eth])
+      storeExcelContent.append(storeTokenSymbol[eth].upper())
+      storeExcelTkId.append(storeTokenID[eth])
+      storeExcelTkPlatform.append(storePlatform[eth])
+      storeExcelCategories.append(storeCategories[eth])
+    break   
+
+
+#Gọi ra các hàm cần thiết để thực hiện việc lấy ra thông tin hisrorical price trên BINANCE SMART CHAIN
+for jj in range (0,len(storeTokenID),thread_number):
+  change_ip()
+  tao_thread_tinh_eth(jj)
+  tat_dcom()
+
+
+
+#Nén 2 cái storeExelTKaddress và storeExcelContent vào để viết ra 
+storeExcelResult = zip(storeExcelTkId,storeExcelTkAddress,storeExcelContent,storeExcelTkPlatform,storeExcelCategories)    
+    
+#viết vào excel
+workBook = xlsxwriter.Workbook('Tool 11 Result.xlsx')
+workSheet = workBook.add_worksheet()
+row = 0
+col = 0
+if storeExcelTkAddress != []:
+  for n,m,v,x,z in storeExcelResult:
+    workSheet.write(row,col,n)
+    workSheet.write(row,col+1,m)
+    workSheet.write(row,col+2,v)
+    workSheet.write(row,col+3,x)
+    workSheet.write(row,col+4,z)
+    row += 1
+else:
+  workSheet.write(col,row,'Không có kết quả nào trả về')
+workBook.close()  
